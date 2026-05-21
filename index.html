@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>梯形透視修正</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 4px;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    font-size: 0.85rem;
+    color: #64748b;
+    margin-bottom: 24px;
+  }
+
+  /* Upload zone */
+  #upload-zone {
+    width: 100%;
+    max-width: 680px;
+    border: 2px dashed #334155;
+    border-radius: 16px;
+    padding: 48px 24px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    background: #1e293b;
+  }
+  #upload-zone:hover, #upload-zone.drag-over {
+    border-color: #60a5fa;
+    background: #1e2d40;
+  }
+  #upload-zone svg { color: #475569; margin-bottom: 12px; }
+  #upload-zone p { font-size: 0.9rem; color: #94a3b8; }
+  #upload-zone span { color: #60a5fa; font-weight: 600; }
+  #file-input { display: none; }
+
+  /* Main editor */
+  #editor { display: none; width: 100%; max-width: 1100px; }
+
+  .columns {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .panel {
+    background: #1e293b;
+    border-radius: 16px;
+    padding: 16px;
+    flex: 1;
+    min-width: 280px;
+  }
+
+  .panel-title {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #64748b;
+    margin-bottom: 12px;
+  }
+
+  #canvas-wrap {
+    position: relative;
+    display: inline-block;
+    cursor: crosshair;
+    user-select: none;
+    touch-action: none;
+  }
+
+  #src-canvas {
+    display: block;
+    max-width: 100%;
+    border-radius: 8px;
+  }
+
+  #overlay {
+    position: absolute;
+    top: 0; left: 0;
+    pointer-events: none;
+  }
+
+  .handle {
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    cursor: grab;
+    border: 2.5px solid #fff;
+    box-shadow: 0 0 0 3px rgba(96,165,250,.5), 0 2px 8px rgba(0,0,0,.6);
+    pointer-events: all;
+    transition: transform .1s;
+    z-index: 10;
+  }
+  .handle:active { cursor: grabbing; transform: translate(-50%,-50%) scale(1.25); }
+  .handle.tl { background: #f97316; }
+  .handle.tr { background: #22c55e; }
+  .handle.br { background: #3b82f6; }
+  .handle.bl { background: #a855f7; }
+
+  /* Controls */
+  .btn-row {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+    flex-wrap: wrap;
+  }
+
+  button {
+    flex: 1;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 10px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s, transform .1s;
+  }
+  button:hover { opacity: .88; }
+  button:active { transform: scale(.97); }
+
+  #btn-correct {
+    background: linear-gradient(135deg, #3b82f6, #6366f1);
+    color: #fff;
+  }
+  #btn-reset {
+    background: #334155;
+    color: #94a3b8;
+  }
+  #btn-upload-new {
+    background: #1e293b;
+    border: 1px solid #334155;
+    color: #94a3b8;
+  }
+
+  /* Result */
+  #result-panel { display: none; }
+
+  #result-canvas {
+    display: block;
+    max-width: 100%;
+    border-radius: 8px;
+  }
+
+  #btn-download {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: #fff;
+    width: 100%;
+    margin-top: 12px;
+  }
+
+  .tip {
+    font-size: 0.78rem;
+    color: #475569;
+    margin-top: 10px;
+    line-height: 1.6;
+  }
+
+  .color-legend {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    font-size: 0.78rem;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; color: #94a3b8; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+</style>
+</head>
+<body>
+
+<h1>梯形透視修正</h1>
+<p class="subtitle">拖曳四個角點對齊文件邊緣，一鍵還原成正確矩形視角</p>
+
+<!-- Upload -->
+<div id="upload-zone" onclick="document.getElementById('file-input').click()">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" xmlns="http://www.w3.org/2000/svg">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+    <polyline points="17 8 12 3 7 8"/>
+    <line x1="12" y1="3" x2="12" y2="15"/>
+  </svg>
+  <p><span>點擊上傳</span>或拖曳圖片到此處</p>
+  <p style="margin-top:6px;font-size:.78rem;color:#475569">支援 JPG、PNG、WEBP</p>
+</div>
+<input type="file" id="file-input" accept="image/*">
+
+<!-- Editor -->
+<div id="editor">
+  <div class="columns">
+    <!-- Source -->
+    <div class="panel" style="flex:1.3">
+      <div class="panel-title">原始圖片 — 拖曳角點</div>
+      <div id="canvas-wrap">
+        <canvas id="src-canvas"></canvas>
+        <canvas id="overlay"></canvas>
+        <div class="handle tl" id="h0"></div>
+        <div class="handle tr" id="h1"></div>
+        <div class="handle br" id="h2"></div>
+        <div class="handle bl" id="h3"></div>
+      </div>
+      <div class="color-legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div>左上</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div>右上</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div>右下</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#a855f7"></div>左下</div>
+      </div>
+      <p class="tip">將四個彩色圓點拖曳至要修正的矩形四個角。<br>修正後會自動計算最佳輸出尺寸。</p>
+      <div class="btn-row">
+        <button id="btn-reset">重置角點</button>
+        <button id="btn-correct">修正透視</button>
+        <button id="btn-upload-new">換圖片</button>
+      </div>
+    </div>
+
+    <!-- Result -->
+    <div class="panel" id="result-panel" style="flex:1">
+      <div class="panel-title">修正結果</div>
+      <canvas id="result-canvas"></canvas>
+      <button id="btn-download">下載修正圖片</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+let imgEl = null;
+let naturalW = 0, naturalH = 0;
+let displayScale = 1; // naturalPx / displayPx
+
+// corners in display-px coords: [TL, TR, BR, BL]
+let corners = [];
+
+const srcCanvas  = document.getElementById('src-canvas');
+const overlayEl  = document.getElementById('overlay');
+const resultCanvas = document.getElementById('result-canvas');
+const canvasWrap = document.getElementById('canvas-wrap');
+const handles    = [
+  document.getElementById('h0'),
+  document.getElementById('h1'),
+  document.getElementById('h2'),
+  document.getElementById('h3'),
+];
+const srcCtx    = srcCanvas.getContext('2d');
+const overlayCtx = overlayEl.getContext('2d');
+const resultCtx = resultCanvas.getContext('2d');
+
+// ─── Upload / drag-drop ───────────────────────────────────────────────────────
+const uploadZone = document.getElementById('upload-zone');
+const fileInput  = document.getElementById('file-input');
+
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) loadFile(file);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) loadFile(fileInput.files[0]); });
+
+document.getElementById('btn-upload-new').addEventListener('click', () => {
+  fileInput.click();
+});
+
+function loadFile(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    imgEl = img;
+    naturalW = img.naturalWidth;
+    naturalH = img.naturalHeight;
+    initEditor();
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
+}
+
+// ─── Init editor ──────────────────────────────────────────────────────────────
+function initEditor() {
+  // Fit to max 640px wide
+  const maxW = Math.min(640, window.innerWidth - 80);
+  displayScale = naturalW / Math.min(naturalW, maxW);
+  const dw = Math.round(naturalW / displayScale);
+  const dh = Math.round(naturalH / displayScale);
+
+  srcCanvas.width  = dw;
+  srcCanvas.height = dh;
+  overlayEl.style.width  = dw + 'px';
+  overlayEl.style.height = dh + 'px';
+  overlayEl.width  = dw;
+  overlayEl.height = dh;
+
+  srcCtx.drawImage(imgEl, 0, 0, dw, dh);
+
+  // Default corners: inset 10%
+  const ix = dw * 0.1, iy = dh * 0.1;
+  corners = [
+    [ix,      iy],
+    [dw - ix, iy],
+    [dw - ix, dh - iy],
+    [ix,      dh - iy],
+  ];
+
+  positionHandles();
+  drawOverlay();
+
+  uploadZone.style.display = 'none';
+  document.getElementById('editor').style.display = 'block';
+  document.getElementById('result-panel').style.display = 'none';
+}
+
+function resetCorners() {
+  const dw = srcCanvas.width, dh = srcCanvas.height;
+  const ix = dw * 0.1, iy = dh * 0.1;
+  corners = [
+    [ix,      iy],
+    [dw - ix, iy],
+    [dw - ix, dh - iy],
+    [ix,      dh - iy],
+  ];
+  positionHandles();
+  drawOverlay();
+}
+
+// ─── Handles positioning ──────────────────────────────────────────────────────
+function positionHandles() {
+  const rect = srcCanvas.getBoundingClientRect();
+  const scaleX = srcCanvas.width  / rect.width;
+  const scaleY = srcCanvas.height / rect.height;
+
+  handles.forEach((h, i) => {
+    const [cx, cy] = corners[i];
+    // Convert canvas-px → CSS-px relative to canvasWrap
+    const css_x = cx / scaleX;
+    const css_y = cy / scaleY;
+    h.style.left = css_x + 'px';
+    h.style.top  = css_y + 'px';
+  });
+}
+
+// ─── Overlay drawing ──────────────────────────────────────────────────────────
+function drawOverlay() {
+  const w = overlayEl.width, h = overlayEl.height;
+  overlayCtx.clearRect(0, 0, w, h);
+
+  // Fill quad semi-transparent
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(...corners[0]);
+  overlayCtx.lineTo(...corners[1]);
+  overlayCtx.lineTo(...corners[2]);
+  overlayCtx.lineTo(...corners[3]);
+  overlayCtx.closePath();
+  overlayCtx.fillStyle = 'rgba(96,165,250,0.12)';
+  overlayCtx.fill();
+
+  // Stroke quad
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(...corners[0]);
+  overlayCtx.lineTo(...corners[1]);
+  overlayCtx.lineTo(...corners[2]);
+  overlayCtx.lineTo(...corners[3]);
+  overlayCtx.closePath();
+  overlayCtx.strokeStyle = 'rgba(96,165,250,0.85)';
+  overlayCtx.lineWidth = 2;
+  overlayCtx.stroke();
+
+  // Diagonals (guide lines)
+  overlayCtx.beginPath();
+  overlayCtx.moveTo(...corners[0]);
+  overlayCtx.lineTo(...corners[2]);
+  overlayCtx.moveTo(...corners[1]);
+  overlayCtx.lineTo(...corners[3]);
+  overlayCtx.strokeStyle = 'rgba(96,165,250,0.25)';
+  overlayCtx.lineWidth = 1;
+  overlayCtx.stroke();
+}
+
+// ─── Drag handles ────────────────────────────────────────────────────────────
+let dragging = null;
+
+handles.forEach((h, i) => {
+  h.addEventListener('pointerdown', e => {
+    dragging = i;
+    h.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+});
+
+canvasWrap.addEventListener('pointermove', e => {
+  if (dragging === null) return;
+  const rect  = srcCanvas.getBoundingClientRect();
+  const scaleX = srcCanvas.width  / rect.width;
+  const scaleY = srcCanvas.height / rect.height;
+  const cx = Math.max(0, Math.min(srcCanvas.width,  (e.clientX - rect.left) * scaleX));
+  const cy = Math.max(0, Math.min(srcCanvas.height, (e.clientY - rect.top)  * scaleY));
+  corners[dragging] = [cx, cy];
+  positionHandles();
+  drawOverlay();
+});
+
+canvasWrap.addEventListener('pointerup', () => { dragging = null; });
+
+document.getElementById('btn-reset').addEventListener('click', resetCorners);
+
+// ─── Homography ───────────────────────────────────────────────────────────────
+// Solve 8×8 linear system via Gaussian elimination
+function gaussianElim(A, b) {
+  const n = b.length;
+  // Augmented matrix
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let col = 0; col < n; col++) {
+    // Pivot
+    let maxRow = col;
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[maxRow][col])) maxRow = r;
+    }
+    [M[col], M[maxRow]] = [M[maxRow], M[col]];
+    if (Math.abs(M[col][col]) < 1e-12) continue;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r][col] / M[col][col];
+      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+  return M.map((row, i) => row[n] / row[i]);
+}
+
+// Returns 3×3 homography matrix H such that H * src → dst
+function computeHomography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [sx, sy] = src[i];
+    const [dx, dy] = dst[i];
+    A.push([sx, sy, 1,  0,  0, 0, -dx * sx, -dx * sy]);
+    b.push(dx);
+    A.push([ 0,  0, 0, sx, sy, 1, -dy * sx, -dy * sy]);
+    b.push(dy);
+  }
+  const h = gaussianElim(A, b);
+  return [
+    [h[0], h[1], h[2]],
+    [h[3], h[4], h[5]],
+    [h[6], h[7],   1 ],
+  ];
+}
+
+// Apply H to a point [x,y]
+function applyH(H, x, y) {
+  const [a, b, c] = H[0];
+  const [d, e, f] = H[1];
+  const [g, hi, j] = H[2];
+  const w = g * x + hi * y + j;
+  return [(a * x + b * y + c) / w, (d * x + e * y + f) / w];
+}
+
+// ─── Perspective correction ───────────────────────────────────────────────────
+document.getElementById('btn-correct').addEventListener('click', correctPerspective);
+
+function dist(a, b) {
+  return Math.hypot(a[0] - b[0], a[1] - b[1]);
+}
+
+function correctPerspective() {
+  const [tl, tr, br, bl] = corners;
+
+  // Output size: average of opposite sides, scaled back to natural res
+  const wTop  = dist(tl, tr) * displayScale;
+  const wBot  = dist(bl, br) * displayScale;
+  const hLeft = dist(tl, bl) * displayScale;
+  const hRight = dist(tr, br) * displayScale;
+
+  const outW = Math.round(Math.max(wTop, wBot));
+  const outH = Math.round(Math.max(hLeft, hRight));
+
+  if (outW < 2 || outH < 2) return;
+
+  // Scale corners back to natural-res coords
+  const srcNat = corners.map(([x, y]) => [x * displayScale, y * displayScale]);
+  const dstNat = [
+    [0,    0   ],
+    [outW, 0   ],
+    [outW, outH],
+    [0,    outH],
+  ];
+
+  // Inverse homography: dst → src (for backward mapping)
+  const H_inv = computeHomography(dstNat, srcNat);
+
+  // Render at full resolution using off-screen canvas
+  const offscreen = document.createElement('canvas');
+  offscreen.width  = outW;
+  offscreen.height = outH;
+  const octx = offscreen.getContext('2d');
+  octx.drawImage(imgEl, 0, 0, naturalW, naturalH);
+  const srcData = octx.getImageData(0, 0, naturalW, naturalH);
+
+  const outData = octx.createImageData(outW, outH);
+  const src = srcData.data;
+  const out = outData.data;
+
+  for (let oy = 0; oy < outH; oy++) {
+    for (let ox = 0; ox < outW; ox++) {
+      const [fx, fy] = applyH(H_inv, ox, oy);
+
+      // Bilinear interpolation
+      const x0 = Math.floor(fx), y0 = Math.floor(fy);
+      const x1 = x0 + 1,        y1 = y0 + 1;
+      const tx = fx - x0,        ty = fy - y0;
+
+      const clamp = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
+      const xi0 = clamp(x0, 0, naturalW - 1);
+      const yi0 = clamp(y0, 0, naturalH - 1);
+      const xi1 = clamp(x1, 0, naturalW - 1);
+      const yi1 = clamp(y1, 0, naturalH - 1);
+
+      for (let c = 0; c < 4; c++) {
+        const p00 = src[(yi0 * naturalW + xi0) * 4 + c];
+        const p10 = src[(yi0 * naturalW + xi1) * 4 + c];
+        const p01 = src[(yi1 * naturalW + xi0) * 4 + c];
+        const p11 = src[(yi1 * naturalW + xi1) * 4 + c];
+        const val = p00 * (1 - tx) * (1 - ty)
+                  + p10 *      tx  * (1 - ty)
+                  + p01 * (1 - tx) *      ty
+                  + p11 *      tx  *      ty;
+        out[(oy * outW + ox) * 4 + c] = Math.round(val);
+      }
+    }
+  }
+
+  // Display result (scaled to fit panel)
+  const maxDisplayW = Math.min(480, window.innerWidth - 80);
+  const rScale = outW > maxDisplayW ? maxDisplayW / outW : 1;
+  resultCanvas.width  = Math.round(outW  * rScale);
+  resultCanvas.height = Math.round(outH  * rScale);
+
+  // Put full-res data into offscreen then draw scaled
+  offscreen.width  = outW;
+  offscreen.height = outH;
+  offscreen.getContext('2d').putImageData(outData, 0, 0);
+  resultCtx.drawImage(offscreen, 0, 0, resultCanvas.width, resultCanvas.height);
+
+  // Store full-res offscreen for download
+  resultCanvas._fullRes = offscreen;
+  resultCanvas._fullResData = outData;
+
+  document.getElementById('result-panel').style.display = 'block';
+  document.getElementById('result-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ─── Download ─────────────────────────────────────────────────────────────────
+document.getElementById('btn-download').addEventListener('click', () => {
+  const fr = resultCanvas._fullRes;
+  if (!fr) return;
+  const url = fr.toDataURL('image/png');
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'corrected.png';
+  a.click();
+});
+
+// Reposition handles on window resize
+window.addEventListener('resize', () => {
+  if (imgEl) positionHandles();
+});
+</script>
+</body>
+</html>
