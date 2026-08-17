@@ -517,14 +517,22 @@ function correctPerspective() {
   // Inverse homography: dst → src (for backward mapping)
   const H_inv = computeHomography(dstNat, srcNat);
 
+  // Snapshot the source image at full natural resolution (must be its own
+  // canvas — sizing it to outW×outH would clip pixel data outside that
+  // region and produce transparent gaps when the crop is smaller than the
+  // full photo).
+  const srcCanvasFull = document.createElement('canvas');
+  srcCanvasFull.width  = naturalW;
+  srcCanvasFull.height = naturalH;
+  const srcFullCtx = srcCanvasFull.getContext('2d');
+  srcFullCtx.drawImage(imgEl, 0, 0, naturalW, naturalH);
+  const srcData = srcFullCtx.getImageData(0, 0, naturalW, naturalH);
+
   // Render at full resolution using off-screen canvas
   const offscreen = document.createElement('canvas');
   offscreen.width  = outW;
   offscreen.height = outH;
   const octx = offscreen.getContext('2d');
-  octx.drawImage(imgEl, 0, 0, naturalW, naturalH);
-  const srcData = octx.getImageData(0, 0, naturalW, naturalH);
-
   const outData = octx.createImageData(outW, outH);
   const src = srcData.data;
   const out = outData.data;
@@ -582,11 +590,32 @@ function correctPerspective() {
 document.getElementById('btn-download').addEventListener('click', () => {
   const fr = resultCanvas._fullRes;
   if (!fr) return;
-  const url = fr.toDataURL('image/png');
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'corrected.png';
-  a.click();
+  fr.toBlob(async (blob) => {
+    if (!blob) return;
+    const file = new File([blob], 'corrected.png', { type: 'image/png' });
+
+    // iOS Safari largely ignores the <a download> attribute for images
+    // (it just opens the file instead of saving it), so prefer the native
+    // share sheet — which includes "Save Image" — when files can be shared.
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+        return;
+      } catch (err) {
+        if (err && err.name === 'AbortError') return; // user cancelled
+        // fall through to direct download on any other failure
+      }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'corrected.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
 });
 
 // Reposition handles on window resize
