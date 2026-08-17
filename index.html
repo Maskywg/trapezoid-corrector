@@ -332,12 +332,15 @@ function initEditor() {
     [ix,      dh - iy],
   ];
 
-  positionHandles();
-  drawOverlay();
-
+  // Must show #editor before positioning handles — while it's display:none,
+  // srcCanvas has no layout box, so getBoundingClientRect() returns all
+  // zeros and every handle collapses to (0,0) instead of its real corner.
   uploadZone.style.display = 'none';
   document.getElementById('editor').style.display = 'block';
   document.getElementById('result-panel').style.display = 'none';
+
+  positionHandles();
+  drawOverlay();
 }
 
 function resetCorners() {
